@@ -4,66 +4,135 @@
 
 extern crate alloc;
 
-use core::fmt;
+use core::fmt::{self, Write};
 
-use alloc::{boxed::Box, string::ToString};
+use alloc::string::{String, ToString};
 
 //
 
-// #[derive(Debug)]
-// #[repr(transparent)]
-// pub struct View([Part]);
+pub fn sanitized<T>(val: T) -> Sanitized<T> {
+    Sanitized(val)
+}
 
-// impl View {
-//     #[doc(hidden)]
-//     pub const fn __unsafe_from_parts(parts: &[Part]) -> &Self {
-//         unsafe { core::mem::transmute::<&[Part], &Self>(parts) }
-//     }
-// }
+pub fn unsanitized<T>(val: T) -> Unsanitized<T> {
+    Unsanitized(val)
+}
 
-#[derive(Debug)]
-pub struct View<const N: usize>([Part; N]);
+//
 
-impl<const N: usize> View<N> {
-    #[doc(hidden)]
-    pub const fn __new(parts: [Part; N]) -> Self {
-        Self(parts)
+pub struct WrapView<F>(pub F);
+
+//
+
+pub struct DisplayView<'a, V: ?Sized>(pub &'a V);
+
+impl<V: View + ?Sized> fmt::Display for DisplayView<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        View::fmt(self.0, f)
     }
 }
 
 //
 
-pub enum Part {
-    Static(&'static str),
-    Parameter(Box<dyn fmt::Display>),
+pub trait View {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result;
+
+    fn display(&self) -> DisplayView<Self> {
+        DisplayView(self)
+    }
+
+    fn to_string(&self) -> String {
+        ToString::to_string(&self.display())
+    }
+}
+
+impl<F: Fn(&mut fmt::Formatter) -> fmt::Result> View for WrapView<F> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        (self.0)(f)
+    }
+}
+
+// impl<V: View, F: Fn() -> V> View for F {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         self().fmt(f)
+//     }
+// }
+
+impl<T: fmt::Display> View for T {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&Sanitized(self), f)
+    }
 }
 
 //
 
-impl<const N: usize> fmt::Display for View<N> {
+pub struct Sanitized<T: ?Sized>(T);
+
+impl<T: fmt::Display + ?Sized> fmt::Display for Sanitized<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for part in self.0.iter() {
-            fmt::Display::fmt(part, f)?;
+        Sanitizer { f }.write_fmt(format_args!("{}", &self.0))
+    }
+}
+
+struct Sanitizer<'a, 'b> {
+    f: &'a mut fmt::Formatter<'b>,
+}
+
+impl fmt::Write for Sanitizer<'_, '_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            if let Some(replacement) = clean_text(c) {
+                self.f.write_str(replacement)?;
+            } else {
+                self.f.write_char(c)?;
+            }
         }
 
         Ok(())
     }
 }
 
-impl fmt::Display for Part {
+//
+
+pub struct Unsanitized<T: ?Sized>(T);
+
+impl<T: fmt::Display + ?Sized> View for Unsanitized<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Part::Static(s) => f.write_str(s),
-            Part::Parameter(p) => p.fmt(f),
-        }
+        f.write_fmt(format_args!("{}", &self.0))
     }
 }
 
-impl fmt::Debug for Part {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Part::Static(s) => f.debug_tuple("Static").field(s).finish(),
-            Part::Parameter(p) => f.debug_tuple("Parameter").field(&p.to_string()).finish(),
-        }
-    }
+//
+
+// stolen (+ adapted) from: https://github.com/rust-ammonia/ammonia
+fn clean_text(c: char) -> Option<&'static str> {
+    let replacement = match c {
+        // this character, when confronted, will start a tag
+        '<' => "&lt;",
+        // in an unquoted attribute, will end the attribute value
+        '>' => "&gt;",
+        // in an attribute surrounded by double quotes, this character will end the attribute value
+        '\"' => "&quot;",
+        // in an attribute surrounded by single quotes, this character will end the attribute value
+        '\'' => "&apos;",
+        // in HTML5, returns a bogus parse error in an unquoted attribute, while in SGML/HTML, it will end an attribute value surrounded by backquotes
+        '`' => "&grave;",
+        // in an unquoted attribute, this character will end the attribute
+        '/' => "&#47;",
+        // starts an entity reference
+        '&' => "&amp;",
+        // if at the beginning of an unquoted attribute, will get ignored
+        '=' => "&#61;",
+        // will end an unquoted attribute
+        ' ' => "&#32;",
+        '\t' => "&#9;",
+        '\n' => "&#10;",
+        '\x0c' => "&#12;",
+        '\r' => "&#13;",
+        // a spec-compliant browser will perform this replacement anyway, but the middleware might not
+        '\0' => "&#65533;",
+        // ALL OTHER CHARACTERS ARE PASSED THROUGH VERBATIM
+        _ => return None,
+    };
+    Some(replacement)
 }

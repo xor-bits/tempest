@@ -1,7 +1,5 @@
-use std::fmt::Display;
-
-use axum::{response::Html, routing::get};
-use tempest::{view, View};
+use axum::{extract::Path, response::Html, routing::get};
+use tempest::*;
 use tokio::net::TcpListener;
 
 use anyhow::Result;
@@ -16,7 +14,8 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
 
     let router = axum::Router::new()
-        .route("/", get(index))
+        .route("/:id", get(index))
+        .route("/more", get(more))
         .into_make_service();
 
     println!("listening on `http://{addr}/`");
@@ -25,54 +24,60 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn index() -> Html<String> {
+async fn index(Path(v): Path<u8>) -> Html<String> {
     let view = view! {
         <html>
             <head>
-                <title>Hello</title>
+                <title> "some nice title" </title>
+                <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
             </head>
             <body>
-                <div>
-                    <a href="file:///yeet">Hello</a>
-                    <button attrs/>
-                </div>
+                // {r#"<script>alert("hello 1");</script>"#}
+                // {unsanitized(r#"<script>alert("hello 2");</script>"#)}
+                <h2>"path: " {v}</h2>
+                {app()}
             </body>
         </html>
     };
 
+    tracing::info!("sending `{}`", view.display());
+
     Html(view.to_string())
 }
 
-// fn app() -> impl ViewA {
-//     let x = 4;
-//     WrapView(move |f: &mut core::fmt::Formatter| -> core::fmt::Result {
-//         f.write_str("<a></a>")?;
-//         core::fmt::Display::fmt(&gen(), f)?;
-//         core::fmt::Display::fmt(&x, f)?;
-//         Ok(())
-//     })
-// }
+async fn more() -> Html<String> {
+    Html(app_more().to_string())
+}
 
-// fn gen() -> impl ViewA {
-//     WrapView(|f: &mut core::fmt::Formatter| -> core::fmt::Result {
-//         f.write_str("<a></a>")?;
-//         Ok(())
-//     })
-// }
+fn app() -> impl View {
+    view! {
+        <table>
+            <tr>
+                <th> "a" </th>
+                <th> "b" </th>
+                <th> "c" </th>
+            </tr>
+            {app_more()}
+        </table>
+    }
+}
 
-// struct WrapView<F>(F);
-
-// pub trait ViewA: core::fmt::Display {}
-
-// impl<F: Fn(&mut core::fmt::Formatter) -> core::fmt::Result> ViewA for WrapView<F> {}
-
-// impl<F: Fn(&mut core::fmt::Formatter) -> core::fmt::Result> core::fmt::Display for WrapView<F> {
-//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-//         (self.0)(f)
-//     }
-// }
-
-// pub struct View {
-//     _0: &'static str,
-//     _1: &
-// }
+fn app_more() -> impl View {
+    view! {
+        <tr>
+            <td> "1" </td>
+            <td> "2" </td>
+            <td> "3" </td>
+        </tr>
+        <tr id="replaceMe">
+            <td colspan="3">
+                <button class="btn" hx-get="/more"
+                                    hx-target="#replaceMe"
+                                    hx-swap="outerHTML">
+                    "load more"
+                    <img class="htmx-indicator" src="/img/bars.svg" />
+                </button>
+            </td>
+        </tr>
+    }
+}
